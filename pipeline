@@ -1,0 +1,85 @@
+`timescale 1ns/10ps
+module pipeline(clk,reset,switch,led,digi,Rx,Tx);
+input clk,reset,Rx;
+input [7:0]switch;
+output Tx;
+output [7:0]led;
+output [31:0]digi;
+wire lw_stall,BhALUOut0,irq,irqout,irq_jump,irq_nojump,ID_PC31,ID_RegWr,ID_ALUSrc1,ID_ALUSrc2,ID_Sign,ID_MemWr,ID_MemRd,ID_EXTop,ID_LUop,ID_EPCWr;
+wire [1:0]Bh_stall,ID_RegDst,ID_MemtoReg,EX_MemtoReg,MEM_MemtoReg,WB_MemtoReg,ForwardA,ForwardB,ForwardC, ForwardD;
+wire [31:0] DataRa,IF_PC,IF_PC4,IF_Inst,ID_Inst,ID_PC4,ID_PC,ID_DataA,ID_DataB,Bh_out,ID_ConBA,MEM_DataB;
+wire [25:0] ID_JT;
+wire [2:0]PCSrc,ID_PCSrc;
+wire [31:0]/*WB_out,*/MEM_ALUOut,ID_outimm,EX_DataA,EX_DataB,EX_outimm,EX_PC4,EX_PC,EX_ALUOut,ALUin1,ALUin2,
+             MEM_PC4,MEM_PC,MEM_MEMOut,WB_PC4,WB_PC,WB_ALUOut,WB_MEMOut,MEM_MEMOut1,MEM_MEMOut2,EX_DataA1,EX_DataB1;
+wire [4:0]ID_TReg,ID_Rt,ID_Rd,ID_Shamt,ID_Rs,MEM_TReg,EX_Rt,WB_TReg,EX_Rs,EX_Shamt,EX_Rd,EX_TReg;
+wire [15:0]ID_Imm;
+wire [5:0]ID_ALUFun,EX_ALUFun;
+wire WB_RegWr,EX_MemRd,MEM_RegWr,EX_RegWr,EX_ALUSrc1,
+                EX_ALUSrc2,EX_Sign,EX_MemWr,Z,V,N,MEM_MemRd,MEM_MemWr,Rx_data,Tx_data;
+                wire [31:0]WB_out;
+assign  BhALUOut0=Bh_out[0];
+assign DataRa=(ForwardC==2'b01)?MEM_ALUOut:(ForwardC==2'b10)?EX_ALUOut:(ForwardC==2'b11)?WB_ALUOut:ID_DataA;
+assign PCSrc =(ID_PCSrc==3'b1 && BhALUOut0==1'b0)?3'b0:ID_PCSrc;
+assign ID_PC31=ID_PC[31];
+IF_PC    IF_PC_unit(clk,reset,lw_stall,Bh_stall,ID_ConBA,ID_JT,DataRa,PCSrc,IF_PC,IF_PC4);
+ROM      ROM_unit(IF_PC,IF_Inst);
+IF_ID    IF_ID_unit(clk,reset,IF_Inst,IF_PC,IF_PC4,ID_Inst,ID_PC4,ID_PC,lw_stall,Bh_stall);
+assign ID_TReg=(ID_RegDst==2'b11)?5'd26:(ID_RegDst==2'b10)?
+               5'd31:(ID_RegDst==2'b01)?ID_Rt:ID_Rd;
+Control  Control_unit(ID_Inst,irq,ID_PC31,ID_JT,ID_Imm,ID_Shamt,ID_Rd,ID_Rt,ID_Rs,ID_PCSrc,ID_RegDst,
+                ID_RegWr,ID_ALUSrc1,ID_ALUSrc2,ID_ALUFun,ID_Sign,ID_MemWr,ID_MemRd,ID_MemtoReg,ID_EXTop,ID_LUop,ID_EPCWr);
+RegFile   RegFile_unit(reset,clk,ID_Rs,ID_DataA,ID_Rt,ID_DataB,WB_RegWr,WB_TReg,WB_out);
+//RegFile   RegFile_unit(reset,clk,ID_Rs,ID_DataA,ID_Rt,ID_DataB,MEM_RegWr,MEM_TReg,WB_out);
+branch_forward   branch_forward_unit(ID_PCSrc,MEM_TReg,EX_TReg,WB_TReg,ID_Rs,ID_Rt, WB_RegWr,EX_RegWr,MEM_RegWr,ForwardC,ForwardD);
+                                 
+Branchhazard  Branchhazard_unit(ID_PCSrc,ID_TReg,IF_Inst,BhALUOut0,ID_RegWr,Bh_stall);
+compare    compare_unit(ForwardC,ForwardD,MEM_ALUOut,ID_ALUFun,ID_DataA,ID_DataB,EX_ALUOut,WB_out,ID_Sign,Bh_out);
+load_usehazard  load_usehazard_unit(ID_MemRd,ID_Rt,IF_Inst,lw_stall);
+forward       forward_unit(MEM_TReg,WB_TReg,EX_Rt,EX_Rs,MEM_RegWr,WB_RegWr,ForwardA,ForwardB);
+Extimm   Extimm_unit(ID_Imm,ID_EXTop,ID_LUop,ID_PC,ID_outimm,ID_ConBA);
+ID_EX    ID_EX_unit(clk,reset,ID_DataA,ID_DataB,ID_outimm,ID_PC4,ID_PC,
+                ID_Shamt,ID_Rd,ID_Rs,ID_Rt,ID_ALUFun,ID_MemtoReg,ID_RegWr,ID_ALUSrc1,
+                   ID_ALUSrc2,ID_Sign,ID_MemWr,ID_MemRd,ID_TReg,EX_DataA,EX_DataB,
+                     EX_outimm,EX_PC4,EX_PC,EX_Shamt,EX_Rd,EX_Rs,EX_Rt,EX_ALUFun,EX_MemtoReg,
+                        EX_RegWr,EX_ALUSrc1,EX_ALUSrc2,EX_Sign,EX_MemWr,EX_MemRd,EX_TReg);
+assign EX_DataA1=(ForwardA==2'b10)?MEM_ALUOut:(ForwardA==2'b01)?WB_out:EX_DataA;
+assign ALUin1=EX_ALUSrc1?{27'b0,EX_Shamt}:EX_DataA1;
+assign EX_DataB1=(ForwardB==2'b10)?MEM_ALUOut:(ForwardB==2'b01)?WB_out:EX_DataB;
+assign ALUin2=EX_ALUSrc2?EX_outimm:EX_DataB1;
+ALU     ALU_unit(ALUin1,ALUin2,EX_Sign,EX_ALUFun,EX_ALUOut,Z,V,N);
+EX_MEM   EX_MEMunit(clk,reset,EX_PC4,EX_PC,EX_ALUOut,EX_TReg,EX_RegWr,EX_MemRd,EX_MemWr,EX_MemtoReg,EX_DataB1,
+              MEM_PC4,MEM_PC,MEM_ALUOut,MEM_TReg,MEM_RegWr,MEM_MemRd,MEM_MemWr,MEM_MemtoReg,MEM_DataB);
+DataMem DataMem_unit(reset,clk,MEM_MemRd,MEM_MemWr,MEM_ALUOut,MEM_DataB?MEM_MEMOut1);
+Peripheral  Peripheral_unit(reset,clk,MEM_ALUOut,MEM_MemRd,MEM_MEMOut2,MEM_MemWr,MEM_DataB,irqout,led,switch,digi,Rx,Tx,Rx_data,Tx_data);
+irqStall  StallIRQ(clk,irqout,irq_nojump,irq_jump);
+assign   irq=(Bh_stall!=2'b00)?irq_jump:irq_nojump;
+assign   MEM_MEMOut=(MEM_ALUOut[31:30]==2'b00)?MEM_MEMOut1:MEM_MEMOut2;
+
+/*always@(*)
+begin
+  case(MEM_MemtoReg)
+  2'b00:
+    WB_out<=MEM_ALUOut;
+  2'b01:
+    WB_out<=MEM_MEMOut;
+  2'b10:
+    WB_out<=MEM_PC4;
+ 
+  default;
+  endcase
+end
+*/
+
+MEM_WB   MEM_WB_unit(clk,reset,MEM_PC4,MEM_PC,MEM_TReg,MEM_ALUOut,MEM_MEMOut,MEM_RegWr,MEM_MemtoReg,
+             WB_PC4,WB_PC,WB_TReg,WB_ALUOut,WB_MEMOut,WB_RegWr,WB_MemtoReg);
+WB      WB_unit(WB_ALUOut,WB_MEMOut,WB_PC4,WB_MemtoReg,WB_out);
+endmodule
+
+
+
+
+
+
+ 
+
