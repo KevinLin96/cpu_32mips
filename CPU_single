@@ -1,0 +1,1134 @@
+
+`timescale 1ns/10ps
+module CPUsingle(system_clk,reset,Tx,Rx,LED,switch,digital);
+ input system_clk, reset,Rx;
+ input [7:0]switch;
+ output Tx;
+ //output [7:0] digi_out1,digi_out2,digi_out3,digi_out4;
+ output [31:0] digital;
+ output [7:0]LED;
+     wire ALUOut0,irq,PC31,Regwr,ALUSrc1,ALUSrc2,Sign,MemWr,MemRd,EXTop,LUop,EPCWr,Z,V,N;
+	 wire [31:0]ConBA,DataRa,PC,TempEpc,Inst,data1,data2,data3,outimm,PC4,ALUin1,ALUin2,rdata1,rdata2,MemOut,ALUOut;
+	 wire [2:0]PCsrc;
+	 wire [25:0]JT;
+	 wire [15:0]Imm;
+	 wire [4:0] Shamt,Rd,Rt,Rs,addr3;
+	 wire [1:0]RegDst,MemtoReg;
+	 wire [5:0]ALUFun;
+     //wire [11:0]digital;//
+	 wire  Rx_data, Tx_data;
+ //system_clk  CLK_unit(system_clk,reset,system_clk);
+ getPC getPC_unit(system_clk,reset,ALUOut0,ConBA,JT,DataRa,PCsrc,PC,TempEpc);
+ ROM  ROM_unit(PC,Inst);
+ assign PC31=PC[31];
+ assign PC4=PC+32'd4;
+ assign ALUOut0=ALUOut[0];
+assign DataRa=data1;
+Control Control_unit(Inst,irq,PC31,JT,Imm,Shamt,Rd,Rt,Rs,PCsrc,RegDst,
+                Regwr,ALUSrc1,ALUSrc2,ALUFun,Sign,MemWr,MemRd,MemtoReg,EXTop,LUop,EPCWr);
+assign addr3=(RegDst==2'b11)?5'd26:(RegDst==2'b10)?
+               5'd31:(RegDst==2'b01)?Rt:Rd;
+RegFile RegFile_unit(reset,system_clk,Rs,data1,Rt,data2,Regwr,addr3,data3);
+Extimm  Extimm_unit(Imm,EXTop,LUop,PC,outimm,ConBA); 
+assign ALUin1=ALUSrc1?{27'b0,Shamt}:data1;
+assign ALUin2=ALUSrc2?outimm:data2;
+ALU   ALU_unit(ALUin1,ALUin2,Sign,ALUFun,ALUOut,Z,V,N);
+DataMem DataMem_unit(reset,system_clk,MemRd,MemWr,ALUOut,data2,rdata1);
+EPC EPC_unit(PC,EPCWr,TempEpc);
+IRQ IRQ_unit(system_clk,irq,stallirq);
+Peripheral Peripheral_unit(reset,system_clk, ALUOut,MemRd,rdata2, MemWr, data2,irq,LED,switch, digital, Rx, Tx, Rx_data, Tx_data);
+assign MemOut=(ALUOut[31:30]==2'b00)?rdata1:rdata2;
+
+//assign MemOut=rdata1rdata2;
+assign data3=(MemtoReg==2'b10)?PC4:(MemtoReg==2'b01)?MemOut:ALUOut;
+//digitube_scan  digitube_scan_unit(digital,digi_out1,digi_out2,digi_out3,digi_out4);
+ 
+
+ 
+endmodule
+
+
+
+module addSub(S,A,B,ct,Z,V,N,out);
+input S,ct;
+input [31:0]A,B;
+output Z,V,N;
+output  [31:0]out;
+wire [1:0]sign;
+reg [32:0]out1;
+wire SS1,SS2,SS3,N1,N2,V1,V2;
+assign Z=(out==0);
+assign out=out1[31:0];
+assign sign={A[31],B[31]};
+assign SS1=(A[30:0]<B[30:0]);
+assign SS2=(A[31]^B[31])?((sign==2'b01)?1'b0:1'b1):SS1;
+assign N2=S?SS2:(A[31:0]<B[31:0]);
+assign SS3=(A[31]^B[31])?out[31]:((sign==2'b00)?1'b0:1'b1);
+assign N1=S?SS3:1'b0;
+assign N=ct?N2:N1;
+assign V1=(A[31]^B[31])?(ct?(A[31]^out[31]):1'b0):(ct?1'b0:(A[31]^out[31]));
+assign V2=ct?~out1[32]:out1[32];
+assign V=S?V1:V2;
+always @(*)
+   begin
+     case(ct)
+      1'b0:
+        out1<=A+B;
+      1'b1:
+        begin
+         out1<=A+~B+33'b1;
+        end
+      default:out1<=33'b0;
+      endcase
+   end
+endmodule
+
+module cmp(A,B,ct,out);
+input [31:0]A,B;
+input [2:0]ct;
+output reg [31:0]out;
+wire S;
+wire ctr,Z1,V1,N1,Z2,V2,N2;
+wire [31:0]tempout1,tempout2,tempin;
+assign ctr=1'b1;
+assign S=1'b1;
+assign tempin=32'b0;
+ addSub AS1(S,A,B,ctr,Z1,V1,N1,tempout1);
+ addSub AS2(S,A,tempin,ctr,Z2,V2,N2,tempout2);
+always@(*)
+begin
+  case(ct)
+    3'b001:
+     if(Z1==1) out<=32'b1;
+         else out<=32'b0;
+     3'b000:
+       if(Z1==0) out<=32'b1;
+       else out<=32'b0;
+    3'b010:
+       if(N1==1) out<=32'b1;
+       else out<=32'b0;
+    3'b110:
+       if((N2==1)||(Z2==1))
+           out<=32'b1;
+        else
+          out<=32'b0;
+     3'b100:
+         if(N2==0)
+           out<=32'b1;
+         else
+           out<=32'b0;
+      3'b111:
+          if((N2==0)&&(Z2==0))
+            out<=32'b1;
+           else
+             out<=32'b0;
+    default:out<=32'b0;
+    endcase
+end
+endmodule
+
+module LOGIC(A,B,ct,out);
+input [31:0]A,B;
+input [3:0] ct;
+output reg [31:0]out;
+always@(*)
+ case(ct)
+  4'b1000:
+   out<=A&B;
+  4'b1110:
+    out<=A|B;
+   4'b0110:
+    out<=A^B;
+   4'b0001:
+     out<=~(A|B);
+    4'b1010:
+      out<=A;
+    default:out<=0;
+ endcase
+endmodule
+
+ module SHIFT(A,B,ct,out);
+  input [31:0]A,B;
+  input [1:0]ct;
+  output reg [31:0]out;
+ always@(*)
+  case(ct)
+   2'b00:out<=(B<<A[4:0]);
+   2'b01:out<=(B>>A[4:0]);
+   2'b11:out<=({{32{B[31]}},B}>>A[4:0]);
+   default: out<=0; 
+ endcase
+endmodule
+
+module ALU(A,B,S,ALUFun,ALUout,Z,V,N);
+input [31:0]A,B;
+input S;
+input [5:0]ALUFun;
+output reg [31:0]ALUout;
+output Z,V,N;
+wire [31:0]ALUout1,ALUout2,ALUout3,ALUout4;
+addSub AS1(S,A,B,ALUFun[0],Z,V,N,ALUout1);
+cmp  compare(A,B,ALUFun[3:1],ALUout2);
+LOGIC  LG(A,B,ALUFun[3:0],ALUout3);
+SHIFT  SFT(A,B,ALUFun[1:0],ALUout4);
+always@(*)
+   case(ALUFun[5:4])
+      2'b00:
+        ALUout<=ALUout1;
+      2'b11:
+         ALUout<=ALUout2;
+       2'b01:
+         ALUout<=ALUout3;
+       2'b10:
+         ALUout<=ALUout4;
+       default: ALUout<=32'b0;
+    endcase
+endmodule
+
+module Control(Inst,IRQ,PC31,JT,Imm,Shamt,Rd,Rt,Rs,Pcsrc,RegDst,
+                Regwr,ALUSrc1,ALUSrc2,ALUFun,Sign,MemWr,MemRd,MemtoReg,EXTop,LUop,EPCWr);
+input [31:0]Inst;
+input IRQ;
+input PC31;
+output [25:0]JT;
+output [15:0]Imm;
+output [4:0]Shamt,Rd,Rt,Rs;
+output [2:0]Pcsrc;
+output [1:0]RegDst;
+output [5:0]ALUFun;
+output [1:0]MemtoReg;
+output Regwr,ALUSrc1,ALUSrc2,Sign,MemWr,MemRd,EXTop,LUop,EPCWr;
+wire [5:0]Opcode,Funcode;
+wire  exception,exception1;
+assign Opcode=Inst[31:26];
+assign Funcode=Inst[5:0];
+assign JT=Inst[25:0];
+assign Imm=Inst[15:0];
+assign Shamt=Inst[10:6];
+assign Rd=Inst[15:11];
+assign Rt=Inst[20:16];
+assign Rs=Inst[25:21];
+assign exception1=((Opcode>=6'b000001)&&(Opcode<6'b010000))?1'b0:
+             ((Opcode==6'b100011)||(Opcode==6'b101011))?1'b0:
+               (Opcode==6'b000000&&((Funcode==6'b000000)||(Funcode==6'b101010)
+                     ||(Funcode>=6'b100000&&Funcode<6'b101000)||(Funcode==6'b000010)||(Funcode==6'b000011)))?
+                1'b0:1'b1;
+assign exception=PC31?1'b0:exception1;
+assign EPCWr=exception?1'b1:1'b0;
+assign MemWr=(Opcode==6'b101011)?1'b1:1'b0;
+assign MemRd=(Opcode==6'b100011)?1'b1:1'b0;
+assign LUop=(Opcode==6'b001111)?1'b1:1'b0;
+assign EXTop=((Opcode==6'b001100)||(Opcode==6'b001011))?1'b0:1'b1;
+assign MemtoReg=(Opcode==6'b100011)?2'b01:
+        ((IRQ&&~PC31)||exception||(Opcode==6'b000011)||(Opcode==6'h00&&Funcode==6'h09))?2'b10:2'b00;
+assign ALUSrc1=((Opcode==6'h00)&&((Funcode==6'h00)||(Funcode==6'h02)||(Funcode==6'h04)))?1'b1:1'b0;
+assign Sign=(Opcode==6'h09||Opcode==6'h0b)?1'b0:
+            ((Opcode==6'h00)&&(Funcode==6'h21||Funcode==6'h23))?1'b0:1'b1;
+assign ALUSrc2=(Opcode==6'h00)?1'b0:(Opcode==6'h04||Opcode==6'h05)?1'b0:1'b1;
+assign Regwr=(Opcode==6'h03)?1'b1:((Opcode>=6'h01&&Opcode<6'h08)||(Opcode==6'h2b))?
+                 1'b0:(Opcode==6'h00&&Funcode==6'h08)?1'b0:1'b1;
+assign RegDst=((IRQ&&~PC31)||exception)?2'b11:(Opcode==6'h03||(Opcode==6'h00&&Funcode==6'h09))?
+               2'b10:(Opcode==6'h00)?2'b00:2'b01;
+assign Pcsrc=(IRQ&&~PC31)?3'b100:exception?3'b101:(Opcode==6'h02||Opcode==6'h03)?3'b010:
+                (Opcode==6'h00&&(Funcode==6'h09||Funcode==6'h08))?3'b011:
+                (Opcode==6'h01)?3'b001:(Opcode>=6'h04&&Opcode<6'h08)?3'b001:3'b000;
+assign ALUFun=(Opcode==6'h00)?(
+                 (Funcode==6'h20||Funcode==6'h21)?6'b000000:
+                 (Funcode==6'h22||Funcode==6'h23)?6'b000001:
+                 (Funcode==6'h24)?6'b011000:
+                 (Funcode==6'h25)?6'b011110:
+                  (Funcode==6'h26)?6'b010110:
+                  (Funcode==6'h27)?6'b010001:
+                   (Funcode==6'h00)?6'b100000:
+                   (Funcode==6'h02)?6'b100001:
+                   (Funcode==6'h03)?6'b100011:
+                   (Funcode==6'h2a)?6'b110101:6'b000000):
+                     (Opcode==6'h23||Opcode==6'h2b||Opcode==6'h08||Opcode==6'h09)?6'b000000:
+                      (Opcode==6'h0c)?6'b011000:
+                       (Opcode==6'h0b||Opcode==6'h0a)?6'b110101:
+                        (Opcode==6'h04)?6'b110011:
+                        (Opcode==6'h05)?6'b110001:
+                         (Opcode==6'h06)?6'b111101:
+                        (Opcode==6'h07)?6'b111111:
+                        (Opcode==6'h01)?6'b111001:6'b000000;
+endmodule
+
+                     
+        module DataMem (reset,clk,rd,wr,addr,wdata,rdata);
+input reset,clk;
+input rd,wr;
+input [31:0] addr;	//Address Must be Word Aligned
+output [31:0] rdata;
+input [31:0] wdata;
+
+parameter RAM_SIZE = 256;
+reg [31:0] RAMDATA [RAM_SIZE-1:0];
+
+assign rdata=(rd && (addr < RAM_SIZE))?RAMDATA[addr[31:2]]:32'b0;
+
+always@(posedge clk) begin
+	if(wr && (addr < RAM_SIZE)) RAMDATA[addr[31:2]]<=wdata;
+end
+
+endmodule
+
+module EPC(PC, EPCWr,EPC);
+  input [31:0] PC;
+  input EPCWr;
+  output reg [31:0] EPC;
+  
+  always@(*)
+  begin
+    if(EPCWr)
+      EPC<=PC;
+    else
+      EPC<=32'b0; 
+   end
+
+endmodule
+
+module Extimm(imm,EXTop,LUop,PC,outimm,conBA);
+input [15:0]imm;
+input [31:0]PC;
+input EXTop,LUop;
+output [31:0]outimm,conBA;
+wire [31:0]tempimm1,tempimm2,tempimm3,tempimm4;
+assign tempimm3={{16{imm[15]}},imm};
+assign tempimm4={{16{1'b0}},imm};
+assign tempimm1=EXTop?tempimm3:tempimm4;
+assign tempimm2={imm,{16{1'b0}}};
+assign outimm=LUop?tempimm2:tempimm1;
+assign conBA[30:0] = PC[30:0] + 31'd4 + (tempimm3<<2);
+assign conBA[31] = PC[31];
+endmodule
+module getPC(CLK,Reset,ALUOut0,ConBA,JT,Ra,PCSrc,PC,TempEpc);
+  input CLK,Reset,ALUOut0;
+  input [31:0] ConBA,Ra;
+  input [25:0] JT;
+  input [2:0] PCSrc;
+  output reg [31:0] PC,TempEpc;
+  wire [31:0] PCAdd4,ConPC,JTPC;
+
+  parameter ILLOP = 32'h8000_0004;  //Interrupt
+  parameter XADR = 32'h8000_0008;   //Exception
+  
+  assign PCAdd4[31]=PC[31];         //The MSB can be changed!
+  assign PCAdd4[30:0]={PC[30:0]+31'd4};   //Get the next PC
+  /******Maybe we have to use a adder?******/
+  assign ConPC=ALUOut0?ConBA:PCAdd4;       //Is condition true?
+  assign JTPC={PCAdd4[31:28],JT,2'b00};    //Jump address
+  
+  always @(posedge CLK or negedge Reset)
+  begin
+    if(~Reset)         //Reset
+      PC<=32'h8000_0000;
+    else
+      begin
+        TempEpc <= PC;
+        case(PCSrc)
+          3'b000:begin PC<=PCAdd4; end      //normal
+          3'b001:begin PC<=ConPC; end       //branch
+          3'b010:begin PC<=JTPC; end       //J and jal
+          3'b011:begin PC<=Ra; end         //jr and jalr
+          3'b100:begin PC<=ILLOP; end      //Interrupt
+          default:begin PC<=XADR; end      //Exception
+        endcase
+      end
+  end
+  
+endmodule
+module IRQ(clk,irq,stallirq);
+  input clk,irq;
+  output reg stallirq;
+  
+  always@(posedge clk)
+  begin
+    stallirq <= irq;
+  end
+  
+endmodule
+
+module Peripheral(reset,clk, addr, rd, rdata, wr, wdata, irqout, led, switch, digi, Rx, Tx, Rx_data, Tx_data);
+	input reset, clk, rd, wr;
+	input [31:0] addr, wdata;
+	output [31:0] rdata;
+	
+	wire [31:0]  IRData;
+	
+
+	output irqout;
+	output [7:0] led;
+	input [7:0] switch;
+	output [31:0] digi;
+	input Rx;
+	output Tx, Rx_data, Tx_data;
+
+
+
+	wire [31:0] timer_TH, timer_TL, timer_TCon;
+	wire [31:0] ledData;
+	wire [31:0] switchData;
+	wire [31:0] digiData;
+	wire [31:0] uartTxD, uartRxD, uartCon;
+	
+	timer Timer1(reset, clk, addr, rd, wr, wdata, timer_TH, timer_TL, timer_TCon);
+	led Led1(reset, clk, addr, wr, wdata, ledData, led);
+	switch Switch1(reset, clk, addr, wr, wdata, switchData, switch);
+	digi digi1(reset, clk, addr, wr, wdata, digiData, digi);
+	
+	
+	UART uart1(reset, clk, addr, rd, wr, wdata, uartTxD, uartRxD, uartCon, Tx, Rx);
+	
+	assign IRData=(addr==32'h4000_0000)?timer_TH:
+				   (addr==32'h4000_0004)?timer_TL:
+				   (addr==32'h4000_0008)?timer_TCon:
+				   (addr==32'h4000_000c)?ledData:
+				   (addr==32'h4000_0010)?switchData:
+				   (addr==32'h4000_0014)?digiData:
+				   (addr==32'h4000_0018)?uartTxD:
+				   (addr==32'h4000_001c)?uartRxD:
+				   (addr==32'h4000_0020)?uartCon:
+				   32'b0;	   
+	assign rdata=rd?IRData:32'b0;			   	   
+	assign irqout=timer_TCon[1]&timer_TCon[2];
+	assign Rx_data=uartCon[1]&uartCon[3];
+	assign Tx_data=uartCon[0]&uartCon[2];
+	
+
+endmodule
+
+/*
+module timer(reset,clk, addr, rd, wr, wdata, TH, TL, TCON);
+	input reset, clk, rd, wr;
+	input [31:0] addr, wdata;
+	output reg [31:0] TH, TL, TCON;
+	
+	always @(posedge clk, negedge reset)
+		begin
+		if(~reset)
+			begin
+			TL<=32'b0;
+			TH<=32'b0;
+			TCON<=32'b0;
+			end
+		else
+			begin
+			if(wr)
+				begin
+				if(addr==32'h4000_0000)		
+					TH<=wdata;
+				else if(addr==32'h4000_0004)
+					TL<=wdata;
+				else if(addr==32'h4000_0008)
+					begin
+					TCON[2:0]<=wdata[2:0];////////////////
+					end
+				end
+				
+				
+				
+			if(rd)
+				begin
+				if(addr==32'h4000_0008)
+					begin
+					TCON[2]<=1'b0;//////////////
+					end
+				end
+				
+			if(TCON[0])
+				begin
+				if(TL==32'hffff_ffff)//
+					begin
+					TL<=TH;
+				if(TCON[1])
+						begin
+						TCON[2]<=1'b1;
+						end
+					end
+				else
+					begin
+					TL<=TL+32'b1;
+					end
+				end
+			end
+		end
+	
+endmodule
+
+*/
+
+
+
+module timer(reset,clk, addr, rd, wr, wdata, TH, TL, TCON);
+	input reset, clk, rd, wr;
+	input [31:0] addr, wdata;
+	output reg [31:0] TH, TL, TCON;
+	
+	always @(posedge clk, negedge reset)
+		begin
+		if(~reset)
+			begin
+			TL<=32'b0;
+			TH<=32'b0;
+			TCON<=32'b0;
+			end
+		else
+			begin
+			if(wr)
+				begin
+				if(addr==32'h4000_0000)		
+					TH<=wdata;
+				else if(addr==32'h4000_0004)
+					TL<=wdata;
+				else if(addr==32'h4000_0008)
+					begin
+					TCON[2:0]<=wdata[2:0];////////////////
+					end
+				end
+				
+				
+				
+			if(rd)
+				begin
+				if(addr==32'h4000_0008)
+					begin
+					TCON[2]<=1'b0;//////////////
+					end
+				end
+				
+			if(TCON[0])
+				begin
+				if(TL==32'h0000_ffff)//????
+					begin
+					TL<=TH;
+				if(TCON[1])
+						begin
+						TCON[2]<=1'b1;
+						end
+					end
+				else
+					begin
+					TL<=TL+32'b1;
+					end
+				end
+			end
+		end
+	
+endmodule
+
+module led(reset, clk, addr, wr, wdata, ledData, led);
+	input reset, clk, wr;
+	input [31:0] addr, wdata;
+	output [7:0] led;
+	output reg [31:0] ledData;
+	
+	assign led=ledData[7:0];
+	
+	always @(posedge clk, negedge reset)
+		begin
+		if(~reset)
+			begin
+			ledData<=32'b0;
+			end
+		else
+			begin
+			if(wr)
+				begin
+				if(addr==32'h4000_000C)
+					begin
+					ledData<=wdata;
+					end
+				end
+			end
+		end
+		
+endmodule
+
+
+module switch(reset, clk, addr, wr, wdata, switchData, switch);
+	input reset, clk, wr;
+	input [31:0] addr, wdata;
+	input [7:0] switch;
+	output [31:0] switchData;
+	
+	wire [31:0] switchData;
+	
+	assign switchData={24'b0, switch};
+		
+endmodule
+
+
+module digi(reset, clk, addr, wr, wdata, digiData, digi);
+	input reset, clk, wr;
+	input [31:0] addr, wdata;
+	output [31:0] digi;
+	output reg [31:0] digiData;
+	
+
+	assign digi[7:0]=digiData[8]?digiData[7:0]:8'd255;
+	assign digi[15:8]=digiData[9]?digiData[7:0]:8'd255;
+	assign digi[23:16]=digiData[10]?digiData[7:0]:8'd255;
+	assign digi[31:24]=digiData[11]?digiData[7:0]:8'd255;///////////////////////////////////////////
+	
+	always @(posedge clk, negedge reset)
+		begin
+		if(~reset)
+			begin
+			digiData<=32'b0;
+			end
+		else
+			begin
+			if(wr)
+				begin
+				if(addr==32'h4000_0014)
+					begin
+					digiData<=wdata;
+					end
+				end
+			end
+		end
+		
+endmodule
+
+module RegFile (reset,clk,addr1,data1,addr2,data2,wr,addr3,data3);
+input reset,clk;
+input wr;
+input [4:0] addr1,addr2,addr3;
+output [31:0] data1,data2;
+input [31:0] data3;
+
+reg [31:0] RF_DATA[31:1];
+integer i;
+
+assign data1=(addr1==5'b0)?32'b0:RF_DATA[addr1];	//$0 MUST be all zeros
+assign data2=(addr2==5'b0)?32'b0:RF_DATA[addr2];
+
+always@(negedge reset or posedge clk) begin
+	if(~reset) begin
+		for(i=1;i<32;i=i+1) RF_DATA[i]<=32'b0;
+	end
+	else begin
+		if(wr && addr3) RF_DATA[addr3] <= data3;
+	end
+end
+endmodule
+
+module BRGenerator(sysclk,BRclk);
+input sysclk;
+output reg BRclk;
+reg [7:0]cnt;
+initial
+begin
+cnt=8'b0000_0000;
+BRclk=0;
+end
+always @(posedge sysclk)
+ begin
+ if(cnt==8'b0000_0000)
+   BRclk=~BRclk;
+  cnt=cnt+8'b0000_0001;
+    if(cnt==8'b1010_0011)
+      cnt=8'b0000_0000;
+  end
+endmodule
+
+
+module Receiver(UART_RX,BRclk,rstb,RX_DATA,RX_STATUS);
+  input UART_RX,BRclk,rstb;
+  output reg [7:0]RX_DATA;
+  output reg RX_STATUS;
+  reg [3:0] bitcounter;
+  reg [3:0] cyclecounter;
+  reg [8:0] datareceived;
+  reg isreceived;
+ always@(posedge BRclk or negedge rstb)
+  begin
+   if(~rstb)
+    begin
+     isreceived<=0;
+     RX_STATUS<=0;
+    end
+   else
+   begin
+    if(RX_STATUS)
+      RX_STATUS<=0;
+   if(~isreceived&&~RX_STATUS&&UART_RX) ;
+     if(~isreceived&&~RX_STATUS&&~UART_RX)
+      begin
+        isreceived<=1;
+        bitcounter<=4'b0000; 
+        cyclecounter<=4'b0000;
+      end
+    if(isreceived)
+     begin 
+      if(cyclecounter==4'b1000)
+      begin
+        datareceived[bitcounter]<=UART_RX;
+       if(bitcounter<=4'b1000)
+         bitcounter<=bitcounter+4'b0001;
+         else
+          begin
+            isreceived<=0;
+            RX_STATUS<=1;
+          end
+      end
+      cyclecounter<=cyclecounter+4'b0001;
+      end
+    end
+  end
+
+always @(posedge RX_STATUS)
+   begin
+     RX_DATA=datareceived[8:1];
+   end
+endmodule
+
+module sender(sysclk,BRclk,rstb,TX_DATA,TX_EN,TX_STATUS,UART_TX);
+     input [7:0] TX_DATA;
+     input TX_EN,BRclk,rstb,sysclk;
+     output reg UART_TX,TX_STATUS;
+     reg issend;
+     reg [3:0]bitcounter;
+     reg [3:0]cyclecounter;
+     
+     
+   always@(posedge BRclk or negedge rstb)
+     begin
+     if(~rstb)
+      begin
+       UART_TX<=1;
+       issend<=0;
+       TX_STATUS<=1;
+       cyclecounter<=4'b0000;
+      end
+      else
+        begin
+          if(TX_EN)
+           begin
+             bitcounter<=4'b0000; 
+             cyclecounter<=4'b0000;    
+             issend<=1;
+             TX_STATUS<=0;
+          end
+           else
+            begin
+             if(cyclecounter==4'b0000)
+              begin
+              bitcounter<=bitcounter+4'b0001;
+               if(issend)
+                 begin
+                  if(bitcounter==4'b0000)
+                    UART_TX<=0;
+                   else
+                   if(bitcounter>4'b0000&&bitcounter<=4'b1000)
+                    UART_TX<=TX_DATA[bitcounter-1];
+                   else
+                    if(bitcounter>4'b1000)
+                     begin
+                     UART_TX<=1;
+                     TX_STATUS<=1;
+                     issend<=0;
+                     end
+                  end
+              end
+               cyclecounter=cyclecounter+4'b0001;
+               end
+             end
+          end
+ endmodule
+/*
+module UART(reset, clk, addr, rd, wr, wdata, TxData, RxData, ConData, Tx, Rx);
+	input reset, clk, rd, wr;
+	input [31:0] addr,  wdata;
+	input Rx;
+	output Tx;
+	output [31:0] TxData, RxData, ConData;
+	reg [31:0] TxData, ConData;
+	wire [31:0] RxData;
+	wire RxStatus, TxStatus;
+	reg TxEn;
+	wire BRclk;
+	
+	assign RxData[31:8]=24'b0;
+	
+	
+	BRGenerator BRG(.sysclk(clk),.BRclk(BRclk)); 
+	
+	Receiver UartRx(Rx,BRclk,  reset , RxData[7:0],RxStatus);
+	              //////////////////////
+	sender UartTx(clk,BRclk, reset,TxData[7:0], TxEn, TxStatus,Tx );/////////////////////////////////
+	              
+	always @(posedge clk, negedge reset)begin
+		if(~reset)begin
+			TxData<=32'b0;
+			ConData<=32'b0;end
+		else begin
+			if(wr)begin
+				if(addr==32'h4000_0018)begin
+					TxData<={24'b0, wdata[7:0]};
+					TxEn<=1'b1;end
+				else if(addr==32'h4000_0020)begin
+					ConData<={28'b0, wdata[3:0]};end end
+			if(rd)begin
+				if(addr==32'h4000_0020)begin
+					ConData[3:2]<=2'b0;end end
+			if(RxStatus)begin
+				ConData[3]<=1'b1;end
+			if( TxEn && BRclk)begin////////////
+				TxEn<=1'b0;//////////////////////
+				ConData[2]<=1'b1;end end end
+
+endmodule
+
+
+*/
+
+
+
+
+
+module UART(reset, clk, addr, rd, wr, wdata, TxData, RxData, ConData, Tx, Rx);
+	input reset, clk, rd, wr;
+	input [31:0] addr,  wdata;
+	input Rx;
+	output Tx;
+	output [31:0] TxData, RxData, ConData;
+	reg [31:0] TxData, ConData;
+	wire [31:0] RxData;
+	wire RxStatus, TxStatus;
+	reg TxEn;
+	wire BRclk;
+	reg [30:0]count;
+	assign RxData[31:8]=24'b0;
+	
+	
+	BRGenerator BRG(.sysclk(clk),.BRclk(BRclk)); 
+	
+	Receiver UartRx(Rx,BRclk,  reset , RxData[7:0],RxStatus);
+	              //////////////////////
+	sender UartTx(clk,BRclk, reset,TxData[7:0], TxEn, TxStatus,Tx );/////////////////////////////////
+	              
+	always @(posedge clk, negedge reset)
+begin
+		if(~reset)begin
+			TxData<=32'b0;
+			ConData<=32'b0;end
+		else 
+		begin
+			if(wr)
+			begin
+				if(addr==32'h4000_0018)
+				begin
+					TxData<={24'b0, wdata[7:0]};
+					TxEn<=1'b1;
+					count<=31'b0;
+					
+end
+				else if(addr==32'h4000_0020)begin
+					ConData<={28'b0, wdata[3:0]};end end
+			if(rd)begin
+				if(addr==32'h4000_0020)begin
+					ConData[3:2]<=2'b0;end end
+			if(RxStatus)begin
+				ConData[3]<=1'b1;end
+			if( TxEn && BRclk && (count>=31'd9600) )begin
+			count<=31'b0;
+			////////////
+				TxEn<=1'b0;//////////////////////
+				ConData[2]<=1'b1;end 
+	if(TxEn) count<=count+1;///////////////////////			
+				end 
+				
+				
+
+end
+
+endmodule
+
+
+/*
+module ROM (addr,data);
+input [31:0] addr;
+output [31:0] data;
+reg [31:0] data;
+localparam ROM_SIZE = 256;
+reg [31:0] ROM_DATA[ROM_SIZE-1:0];
+
+always@(*)
+	case(addr[9:2])	//Address Must Be Word Aligned.
+0: data <=  32'b00001000000100000000000000000010;
+1: data <=  32'b00001000000100000000000001011000;
+2: data <=  32'b00100000000110110000000000010000;
+3: data <=  32'b00000011011000000000000000001000;
+4: data <=  32'b00100000000101110000000000000000;//300->000
+5: data <=  32'b00100000000101100000000001000000;
+6: data <=  32'b10101110111101100000000000000000;
+7: data <=  32'b00100000000101100000000001111001;
+8: data <=  32'b10101110111101100000000000000100;
+9: data <=  32'b00100000000101100000000000100100;
+10: data <=  32'b10101110111101100000000000001000;
+11: data <=  32'b00100000000101100000000000110000;
+12: data <=  32'b10101110111101100000000000001100;
+13: data <=  32'b00100000000101100000000000011001;
+14: data <=  32'b10101110111101100000000000010000;
+15: data <=  32'b00100000000101100000000000010010;
+16: data <=  32'b10101110111101100000000000010100;
+17: data <=  32'b00100000000101100000000000000010;
+18: data <=  32'b10101110111101100000000000011000;
+19: data <=  32'b00100000000101100000000001111000;
+20: data <=  32'b10101110111101100000000000011100;
+21: data <=  32'b00100000000101100000000000000000;
+22: data <=  32'b10101110111101100000000000100000;
+23: data <=  32'b00100000000101100000000000010000;
+24: data <=  32'b10101110111101100000000000100100;
+25: data <=  32'b00100000000101100000000000001000;
+26: data <=  32'b10101110111101100000000000101000;
+27: data <=  32'b00100000000101100000000000000011;
+28: data <=  32'b10101110111101100000000000101100;
+29: data <=  32'b00100000000101100000000001000110;
+30: data <=  32'b10101110111101100000000000110000;
+31: data <=  32'b00100000000101100000000000100001;
+32: data <=  32'b10101110111101100000000000110100;
+33: data <=  32'b00100000000101100000000000000110;
+34: data <=  32'b10101110111101100000000000111000;
+35: data <=  32'b00100000000101100000000000001110;
+36: data <=  32'b10101110111101100000000000111100;
+37: data <=  32'b00111100000001000100000000000000;
+38: data <=  32'b00111100000000111111111111111111;
+39: data <=  32'b10101100100000000000000000001000;
+40: data <=  32'b00100100011000101111111111111111;
+41: data <=  32'b00000000000000000000000000100000;
+42: data <=  32'b00000000000000000000000000100000;
+43: data <=  32'b10101100100000100000000000000100;
+44: data <=  32'b00100100011000100011110010101111;/////////
+45: data <=  32'b10101100100000100000000000000000;
+46: data <=  32'b00100100000000100000000000000011;
+47: data <=  32'b10101100100000100000000000001000;
+48: data <=  32'b00100100000011000000000000000001;
+49: data <=  32'b00100100000011010000000000000010;
+50: data <=  32'b00100100000011100000000000000011;
+51: data <=  32'b00100100000010010001100001101010;
+52: data <=  32'b00000000000000000111100000100000;
+53: data <=  32'b00000000000000000101000000100000;
+54: data <=  32'b00000000000000000101100000100000;
+55: data <=  32'b00001000000100000000000000111011;
+56: data <=  32'b00100001000010000000000000000001;
+57: data <=  32'b00010001000010010000000000000001;
+58: data <=  32'b00001000000100000000000000111000;
+59: data <=  32'b00000000000000000100000000100000;
+60: data <=  32'b00011101010000000000000000000111;
+61: data <=  32'b10001100100010100000000000100000;
+//62: data <=  32'b00110001010010100000000000000001;//
+62: data<=     32'b00100001010010101111111111111001;
+63: data <=  32'b00010101010011001111111111111000;
+64: data <=  32'b10001100100001010000000000011100;
+65: data <=  32'b00000000101000001000100000100000;
+66: data <=  32'b00110010001100010000000011111111;
+67: data <=  32'b00001000000100000000000000111000;
+68: data <=  32'b10001100100010110000000000100000;
+//69: data <=  32'b00110001011010110000000000000001;//
+69: data<=     32'b00100001011010111111111111111001;
+70: data <=  32'b00010101011011001111111111110001;
+71: data <=  32'b10001100100001100000000000011100;
+72: data <=  32'b00000000110000001001000000100000;
+73: data <=  32'b00110010010100100000000011111111;
+74: data <=  32'b00010010001100100000000000000110;
+75: data <=  32'b00000010001100101001100000100010;
+76: data <=  32'b00011110011000000000000000000010;
+77: data <=  32'b00000010010100011001000000100010;
+78: data <=  32'b00001000000100000000000001001010;
+79: data <=  32'b00000010011000001000100000100000;
+80: data <=  32'b00001000000100000000000001001010;
+81: data <=  32'b00000000000000001011000000100000;
+82: data <=  32'b10001100100101100000000000100000;
+83: data <=  32'b00110010110101100000000000000000;//////10
+84: data <=  32'b00010110110000001111111111111100;
+85: data <=  32'b10101100100100010000000000011000;
+86: data <=  32'b10101100100100010000000000001100;
+87: data <=  32'b00001000000100000000000000110101;
+88: data <=  32'b00100100000000101111111111111001;
+89: data <=  32'b00000000000000000000000000100000;
+90: data <=  32'b00000000000000000000000000100000;
+91: data <=  32'b10101100100000110000000000001000;
+92: data <=  32'b00100001111011110000000000000001;
+93: data <=  32'b00110001111110000000000000000011;
+94: data <=  32'b00010011000011000000000000001000;
+95: data <=  32'b00010011000011010000000000001101;
+96: data <=  32'b00010011000011100000000000010010;
+97: data <=  32'b00110000101101000000000011110000;
+98: data <=  32'b00000000000101001010000010000010;
+99: data <=  32'b10001110100101010000000000000000;//
+100: data <=  32'b00100110101101010000100010000000;
+101: data <=  32'b10101100100101010000000000010100;
+102: data <=  32'b00001000000100000000000001111000;
+103: data <=  32'b00110000101101000000000000001111;
+104: data <=  32'b00000000000101001010000010000000;
+105: data <=  32'b10001110100101010000000000000000;//
+106: data <=  32'b00100110101101010000010010000000;
+107: data <=  32'b10101100100101010000000000010100;
+108: data <=  32'b00001000000100000000000001111000;
+109: data <=  32'b00110000110101000000000011110000;
+110: data <=  32'b00000000000101001010000010000010;
+111: data <=  32'b10001110100101010000000000000000;//300->000
+112: data <=  32'b00100110101101010000001010000000;
+113: data <=  32'b10101100100101010000000000010100;
+114: data <=  32'b00001000000100000000000001111000;
+115: data <=  32'b00110000110101000000000000001111;
+116: data <=  32'b00000000000101001010000010000000;
+117: data <=  32'b10001110100101010000000000000000;//
+118: data <=  32'b00100110101101010000000110000000;
+119: data <=  32'b10101100100101010000000000010100;
+120: data <=  32'b00100100000000100000000000000011;
+121: data <=  32'b10101100100000100000000000001000;
+//122: data <=  32'b00100011010110101111111111111100;
+122: data <=  32'b00000011010000000000000000001000;
+
+default:	data=32'h00000000;
+
+endcase
+endmodule
+*/
+
+
+module ROM (addr,data);
+input [31:0] addr;
+output [31:0] data;
+reg [31:0] data;
+localparam ROM_SIZE = 256;
+reg [31:0] ROM_DATA[ROM_SIZE-1:0];
+
+always@(*)
+	case(addr[9:2])	//Address Must Be Word Aligned.
+0: data <=  32'b00001000000100000000000000000010;
+1: data <=  32'b00001000000100000000000001011000;
+2: data <=  32'b00100000000110110000000000010000;
+3: data <=  32'b00000011011000000000000000001000;
+4: data <=  32'b00100000000101110000000000000000;//300->000
+5: data <=  32'b00100000000101100000000001000000;
+6: data <=  32'b10101110111101100000000000000000;
+7: data <=  32'b00100000000101100000000001111001;
+8: data <=  32'b10101110111101100000000000000100;
+9: data <=  32'b00100000000101100000000000100100;
+10: data <=  32'b10101110111101100000000000001000;
+11: data <=  32'b00100000000101100000000000110000;
+12: data <=  32'b10101110111101100000000000001100;
+13: data <=  32'b00100000000101100000000000011001;
+14: data <=  32'b10101110111101100000000000010000;
+15: data <=  32'b00100000000101100000000000010010;
+16: data <=  32'b10101110111101100000000000010100;
+17: data <=  32'b00100000000101100000000000000010;
+18: data <=  32'b10101110111101100000000000011000;
+19: data <=  32'b00100000000101100000000001111000;
+20: data <=  32'b10101110111101100000000000011100;
+21: data <=  32'b00100000000101100000000000000000;
+22: data <=  32'b10101110111101100000000000100000;
+23: data <=  32'b00100000000101100000000000010000;
+24: data <=  32'b10101110111101100000000000100100;
+25: data <=  32'b00100000000101100000000000001000;
+26: data <=  32'b10101110111101100000000000101000;
+27: data <=  32'b00100000000101100000000000000011;
+28: data <=  32'b10101110111101100000000000101100;
+29: data <=  32'b00100000000101100000000001000110;
+30: data <=  32'b10101110111101100000000000110000;
+31: data <=  32'b00100000000101100000000000100001;
+32: data <=  32'b10101110111101100000000000110100;
+33: data <=  32'b00100000000101100000000000000110;
+34: data <=  32'b10101110111101100000000000111000;
+35: data <=  32'b00100000000101100000000000001110;
+36: data <=  32'b10101110111101100000000000111100;
+37: data <=  32'b00111100000001000100000000000000;
+38: data <=  32'b00111100000000110000000000000000;//
+39: data <=  32'b10101100100000000000000000001000;
+40: data <=  32'b00100100011000101111111111111111;
+41: data <=  32'b00000000000000000000000000100000;
+42: data <=  32'b00000000000000000000000000100000;
+43: data <=  32'b10101100100000100000000000000100;
+44: data <=  32'b00100100011000100011110010101111;/////////
+45: data <=  32'b10101100100000100000000000000000;
+46: data <=  32'b00100100000000100000000000000011;
+47: data <=  32'b10101100100000100000000000001000;
+48: data <=  32'b00100100000011000000000000000001;
+49: data <=  32'b00100100000011010000000000000010;
+50: data <=  32'b00100100000011100000000000000011;
+51: data <=  32'b00100100000010010001100001101010;
+52: data <=  32'b00000000000000000111100000100000;
+53: data <=  32'b00000000000000000101000000100000;
+54: data <=  32'b00000000000000000101100000100000;
+55: data <=  32'b00001000000100000000000000111011;
+56: data <=  32'b00100001000010000000000000000001;
+57: data <=  32'b00010001000010010000000000000001;
+58: data <=  32'b00001000000100000000000000111000;
+59: data <=  32'b00000000000000000100000000100000;
+60: data <=  32'b00011101010000000000000000000111;
+61: data <=  32'b10001100100010100000000000100000;
+//62: data <=  32'b00110001010010100000000000000001;//
+62: data<=     32'b00100001010010101111111111111001;
+63: data <=  32'b00010101010011001111111111111000;
+64: data <=  32'b10001100100001010000000000011100;
+65: data <=  32'b00000000101000001000100000100000;
+66: data <=  32'b00110010001100010000000011111111;
+67: data <=  32'b00001000000100000000000000111000;
+68: data <=  32'b10001100100010110000000000100000;
+//69: data <=  32'b00110001011010110000000000000001;//
+69: data<=     32'b00100001011010111111111111111001;
+70: data <=  32'b00010101011011001111111111110001;
+71: data <=  32'b10001100100001100000000000011100;
+72: data <=  32'b00000000110000001001000000100000;
+73: data <=  32'b00110010010100100000000011111111;
+74: data <=  32'b00010010001100100000000000000110;
+75: data <=  32'b00000010001100101001100000100010;
+76: data <=  32'b00011110011000000000000000000010;
+77: data <=  32'b00000010010100011001000000100010;
+78: data <=  32'b00001000000100000000000001001010;
+79: data <=  32'b00000010011000001000100000100000;
+80: data <=  32'b00001000000100000000000001001010;
+81: data <=  32'b00000000000000001011000000100000;
+82: data <=  32'b10001100100101100000000000100000;
+83: data <=  32'b00110010110101100000000000000000;//////10
+84: data <=  32'b00010110110000001111111111111100;
+85: data <=  32'b10101100100100010000000000011000;
+86: data <=  32'b10101100100100010000000000001100;
+87: data <=  32'b00001000000100000000000000110101;
+88: data <=  32'b00100100000000101111111111111001;
+89: data <=  32'b00000000000000000000000000100000;
+90: data <=  32'b00000000000000000000000000100000;
+91: data <=  32'b10101100100000110000000000001000;
+92: data <=  32'b00100001111011110000000000000001;
+93: data <=  32'b00110001111110000000000000000011;
+94: data <=  32'b00010011000011000000000000001000;
+95: data <=  32'b00010011000011010000000000001101;
+96: data <=  32'b00010011000011100000000000010010;
+97: data <=  32'b00110000101101000000000011110000;
+98: data <=  32'b00000000000101001010000010000010;
+99: data <=  32'b10001110100101010000000000000000;//
+100: data <=  32'b00100110101101010000100010000000;
+101: data <=  32'b10101100100101010000000000010100;
+102: data <=  32'b00001000000100000000000001111000;
+103: data <=  32'b00110000101101000000000000001111;
+104: data <=  32'b00000000000101001010000010000000;
+105: data <=  32'b10001110100101010000000000000000;//
+106: data <=  32'b00100110101101010000010010000000;
+107: data <=  32'b10101100100101010000000000010100;
+108: data <=  32'b00001000000100000000000001111000;
+109: data <=  32'b00110000110101000000000011110000;
+110: data <=  32'b00000000000101001010000010000010;
+111: data <=  32'b10001110100101010000000000000000;//300->000
+112: data <=  32'b00100110101101010000001010000000;
+113: data <=  32'b10101100100101010000000000010100;
+114: data <=  32'b00001000000100000000000001111000;
+115: data <=  32'b00110000110101000000000000001111;
+116: data <=  32'b00000000000101001010000010000000;
+117: data <=  32'b10001110100101010000000000000000;//
+118: data <=  32'b00100110101101010000000110000000;
+119: data <=  32'b10101100100101010000000000010100;
+120: data <=  32'b00100100000000100000000000000011;
+121: data <=  32'b10101100100000100000000000001000;
+//122: data <=  32'b00100011010110101111111111111100;
+122: data <=  32'b00000011010000000000000000001000;
+
+default:	data=32'h00000000;
+
+endcase
+endmodule
+
+
